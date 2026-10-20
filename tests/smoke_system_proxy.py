@@ -22,8 +22,11 @@ def main():
         parser.error('This integration test requires --allow-system-proxy')
     service = 'org.deepin.dde.Network1'
     object_path = '/org/deepin/dde/Network1'
+    # Qt 6 ships qdbus as /usr/lib/qt6/bin/qdbus; /usr/bin/qdbus is only a
+    # qtchooser wrapper that cannot resolve a qt6 profile on V25.
+    qdbus = '/usr/lib/qt6/bin/qdbus' if Path('/usr/lib/qt6/bin/qdbus').exists() else 'qdbus'
     def dbus(method, *params):
-        return subprocess.check_output(['qdbus', service, object_path, service+'.'+method, *params], text=True, stderr=subprocess.DEVNULL).strip()
+        return subprocess.check_output([qdbus, service, object_path, service+'.'+method, *params], text=True, stderr=subprocess.DEVNULL).strip()
     try:
         dbus('GetProxyMethod')
     except subprocess.CalledProcessError:

@@ -1,5 +1,5 @@
 [Unit]
-Description=Private proxy control center background service
+Description=私人代理后台服务
 After=network.target
 
 [Service]
@@ -8,6 +8,7 @@ ExecStart=/usr/lib/dcc-proxy/dde-mihomo-daemon --daemon
 Restart=on-failure
 RestartSec=3
 UMask=0077
+Slice=app.slice
 
 [Install]
 WantedBy=default.target

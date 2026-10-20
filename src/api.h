@@ -28,7 +28,7 @@ signals:
     void streamError(const QString &path, const QString &error);
 private:
     QNetworkRequest makeRequest(const QString &path) const;
-    QNetworkAccessManager m_network;
+    QNetworkAccessManager m_network{this};
     QUrl m_endpoint;
     QByteArray m_secret;
     quint64 m_generation = 0;

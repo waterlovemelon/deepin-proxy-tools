@@ -1,7 +1,6 @@
 #!/usr/bin/make -f
 include /usr/share/dpkg/default.mk
 
-export QT_SELECT = qt5
 export QT_QPA_PLATFORM = offscreen
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 DCC_PROXY_JOBS ?= 12
@@ -33,7 +32,9 @@ ifeq ($(DCC_PROXY_BUNDLE_GEODATA),1)
 endif
 	dh_auto_configure -- -DCMAKE_BUILD_TYPE=RelWithDebInfo $(CORE_OPTIONS) $(GEODATA_OPTIONS)
 
-# Preserve the official core byte-for-byte; debug symbols concern our own binaries.
+# Preserve the official core byte-for-byte. Our own binaries are stripped into
+# the -dbgsym package as usual; stripping never removes Qt resources from the
+# QML module, so a 19 MB plugin in the release package would be pure bloat.
 override_dh_strip:
 	dh_strip --exclude=usr/lib/dcc-proxy/mihomo
 

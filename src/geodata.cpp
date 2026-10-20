@@ -46,9 +46,23 @@ int seedGeoData(const QString &work, const QString &resourceDirectory)
     const auto directory = resourceDirectory.isEmpty()
         ? qEnvironmentVariable("DCC_PROXY_GEODATA_DIR", "/usr/share/dcc-proxy") : resourceDirectory;
     const auto manifestPath = directory + "/geodata.json";
-    if (!QFile::exists(manifestPath)) return 0; // Development / explicitly unbundled builds.
-    const auto files = readJson(manifestPath)["files"].toArray();
     const QSet<QString> allowed{"Country.mmdb", "GeoIP.dat", "GeoSite.dat", "ASN.mmdb"};
+    if (!QFile::exists(manifestPath)) {
+        // Unbundled build or a locally provisioned directory: seed the files
+        // that validate structurally instead of making the core download them
+        // (which fails on networks without access to the official mirrors).
+        if (!QDir().mkpath(work)) throw std::runtime_error("无法创建内核数据目录");
+        int local = 0;
+        for (const auto &name : allowed) {
+            const auto source = directory + '/' + name;
+            if (!QFile::exists(source) || !usableDatabase(source, name.endsWith(".mmdb"))) continue;
+            const auto target = work + '/' + name;
+            if (QFile::exists(target) && usableDatabase(target, name.endsWith(".mmdb"))) continue;
+            writeFile(target, readFile(source)); ++local;
+        }
+        return local;
+    }
+    const auto files = readJson(manifestPath)["files"].toArray();
     QSet<QString> provided;
     for (const auto &entry : files) provided.insert(entry.toObject()["file"].toString());
     if (provided != allowed || files.size() != allowed.size())

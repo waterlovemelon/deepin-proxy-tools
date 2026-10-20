@@ -13,6 +13,7 @@
 #include <memory>
 #include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
 #include <QSaveFile>
 #include <QJsonDocument>
 #include <QJsonParseError>
@@ -111,7 +112,7 @@ QByteArray normalizeSubscription(const QByteArray &data)
     YAML::Node proxies(YAML::NodeType::Sequence);
     YAML::Node names(YAML::NodeType::Sequence);
     QSet<QString> usedNames;
-    for (const auto &line : text.split(QRegularExpression("[\r\n]+"), QString::SkipEmptyParts)) {
+    for (const auto &line : text.split(QRegularExpression("[\r\n]+"), Qt::SkipEmptyParts)) {
         if (line.startsWith('#')) continue;
         QUrl url(line.trimmed());
         const QUrlQuery query(url);
@@ -175,7 +176,7 @@ QByteArray normalizeSubscription(const QByteArray &data)
         } else fail("Unsupported subscription format or node scheme: " + scheme + "; request a Clash YAML subscription");
         const auto sni = !q("sni").isEmpty() ? q("sni") : q("peer");
         if (!sni.isEmpty()) p[scheme == "vless" ? "servername" : "sni"] = sni.toStdString();
-        if (!q("alpn").isEmpty()) for (const auto &v : q("alpn").split(',', QString::SkipEmptyParts)) p["alpn"].push_back(v.toStdString());
+        if (!q("alpn").isEmpty()) for (const auto &v : q("alpn").split(',', Qt::SkipEmptyParts)) p["alpn"].push_back(v.toStdString());
         if (q("insecure") == "1" || q("allowInsecure") == "1") p["skip-cert-verify"] = true;
         proxies.push_back(p); names.push_back(name.toStdString());
     }
@@ -267,7 +268,9 @@ QJsonObject Store::settings() const
 {
     auto out = readJson(m_root + "/settings.json");
     if (!out.contains("endpoint")) out["endpoint"] = "http://127.0.0.1:19999";
-    if (!out.contains("core")) {
+    if (out["core"].toString().isEmpty()) {
+        // Older stores and the settings page may persist an empty value; treat
+        // it as "not configured" so the bundled core is picked up again.
         QString core = QFile::exists("/usr/lib/dcc-proxy/mihomo") ? "/usr/lib/dcc-proxy/mihomo" : QStandardPaths::findExecutable("mihomo");
         if (core.isEmpty() && QFile::exists("/opt/clash-party/resources/sidecar/mihomo")) core = "/opt/clash-party/resources/sidecar/mihomo";
         out["core"] = core;

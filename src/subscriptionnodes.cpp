@@ -5,6 +5,7 @@
 #include <QUrl>
 #include <QHostAddress>
 #include <QRegularExpression>
+#include <stdexcept>
 namespace Party {
 QString websiteRule(const QString &input, const QString &policy)
 {

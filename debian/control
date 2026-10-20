@@ -2,25 +2,36 @@ Source: dcc-proxy
 Section: net
 Priority: optional
 Maintainer: DCC Proxy maintainers <Mars-cb@users.noreply.github.com>
-Build-Depends: debhelper-compat (= 11),
- cmake (>= 3.13),
- pkg-config,
+Build-Depends: debhelper-compat (= 13),
+ cmake (>= 3.23),
+ qt6-base-dev,
+ qt6-declarative-dev,
+ qt6-tools-dev,
+ qt6-l10n-tools,
+ dde-control-center-dev (>= 6.1),
  python3,
- openssl,
- qtbase5-dev (>= 5.11),
- qtdeclarative5-dev (>= 5.11),
- dde-control-center-dev,
- libdtkwidget-dev,
  curl,
- gzip
+ gzip,
+ openssl
 Standards-Version: 4.3.0
 Homepage: https://github.com/Mars-cb/dcc-proxy
 Rules-Requires-Root: no
 
 Package: dcc-proxy
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, dde-control-center, libqt5qml5, libqt5svg5
+Depends: ${shlibs:Depends}, ${misc:Depends},
+ dde-control-center (>= 6.1),
+ libdtk6declarative,
+ qml6-module-qtquick,
+ qml6-module-qtquick-controls,
+ qml6-module-qtquick-dialogs,
+ qml6-module-qtquick-layouts,
+ qml6-module-qtquick-window,
+ libqt6svg6
 Description: native private proxy plugin for the Deepin control center
  Manage Mihomo subscriptions, proxy nodes, latency tests, connections,
- rules, overrides, system proxy and PAC bypass settings in the control center.
- The independent dde-mihomo-daemon keeps the proxy running after the UI closes.
+ rules, overrides, system proxy and PAC bypass settings in the V25 control
+ center.
+ The plugin is a QML module (plugins_v1.1/dccproxy) for dde-control-center
+ 6.1; the independent dde-mihomo-daemon, managed as a systemd user service,
+ keeps the proxy running after the control center closes.

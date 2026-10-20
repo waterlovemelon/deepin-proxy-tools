@@ -1,7 +1,213 @@
 # 验证记录
 
-验证环境：本机 AMD64、远端 UOS 20 ARM64，Qt 5.11.3。
-使用环境已安装的构建工具和 Qt，未安装额外依赖。
+本文件记录各版本的验证方式与实际结果。0.1.x 各章对应移植前的 Qt 5 控件版
+（`interface/moduleinterface.h` widget 插件）：其中的 `modules/` 安装路径、
+`dcc-proxy-preview` 程序和 `QT_SELECT=qt5` 命令已不再适用，仅作为历史记录保留。
+最新一轮是 0.2.0 的 V25 版本（Qt 6 / DTK 6 QML 插件），见下节。
+
+## 0.2.0 V25 QML 插件（Qt 6 / DTK 6）
+
+目标环境（本机已安装）：dde-control-center 6.1.104、Qt 6.8.0、DTK 6.7.47。
+插件按 `plugins_v1.1` ABI 安装：`dccproxy.so`、`libdccproxy_qml.so`、`qmldir`
+在控制中心插件目录 `…/dde-control-center/plugins_v1.1/dccproxy/`，构建树中位于
+`build/lib/plugins_v1.1/dccproxy/`。后台仍为
+`/usr/lib/dcc-proxy/dde-mihomo-daemon`，随包内核 `/usr/lib/dcc-proxy/mihomo`，
+登录自启由用户级单元 `dde-mihomo-daemon.service` 控制。
+
+### 构建
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j4
+QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
+```
+
+本机已安装 `dde-control-center-dev`、`debhelper` 与 Qt 6 开发包，因此不需要
+`-DCMAKE_PREFIX_PATH`；开发文件放在非 `/usr` 前缀时再指向该前缀。C++ 侧不链接
+QtWidgets，页面全部由 QML 构成。
+
+### 插件独立加载（无需安装）
+
+```sh
+unshare --user --map-root-user --fork --pid dbus-run-session -- \
+  env QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
+  /usr/libexec/deepin/dde-control-center --spec ./build/lib/plugins_v1.1/
+```
+
+模块状态行 `"dccproxy" : status … "PluginEnd"` 表示插件加载与析构正常。
+页面树为 overview / proxies / profiles / connections / rules / providers /
+logs / override / tools / settings / tun 共 11 个页面。控制中心关闭后后台
+与内核继续运行，此命令同时用于验证“关闭界面不影响内核”。
+
+### 后台与内核冒烟测试
+
+```sh
+python3 tests/smoke_real_core.py \
+  --service /usr/lib/dcc-proxy/dde-mihomo-daemon \
+  --core /usr/lib/dcc-proxy/mihomo --expect-root
+```
+
+0.2.0 已删除 `--preview`：控件版预览程序随 Qt 5 代码一并移除，插件界面改由上面的
+控制中心加载命令验证。`smoke_real_core.py` 其余断言（首个订阅自动启动、DIRECT /
+REJECT 真实流量、无效配置与占用端口保留现有内核、混合/HTTP/SOCKS 端口变更与
+TCP/UDP 冲突、订阅更新、崩溃恢复、停止与后台退出释放内核）保持原样。
+`smoke_modes.py`、`smoke_tun.py`、`smoke_geodata.py`、`smoke_private_proxy.py`
+与 `smoke_system_proxy.py` 通过 `--service` / `--core` 指向构建产物，与 Qt 版本无关。
+
+### 本轮结果（实际执行并观察）
+
+整包构建、CTest、插件加载、页面导航、dccData 数据通路、systemd 生命周期与后台冒烟测试
+均已在本机执行，结果如下；未执行的项目列在 `QA-V25.md` 的“未运行”表中。
+
+| 项目 | 命令 | 结果 |
+| --- | --- | --- |
+| 全量构建 | `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build -j4` | 通过，`-Wall -Wextra -Werror` 无警告；产出 `build/dde-mihomo-daemon`、`build/lib/plugins_v1.1/dccproxy/{dccproxy.so,libdccproxy_qml.so,qmldir}`、`dccproxy_zh_CN.qm`/`dccproxy_en_US.qm` |
+| CTest | `QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure` | 1/1 通过（`party-tests`：8 项 `dccData` 契约检查，覆盖模型角色名、延迟文案、容量格式化、分区示例 YAML、订阅与文档控制器） |
+| 插件加载 | 上面的 `--spec` 命令 | 状态走到 `PluginEnd`（`MetaDataEnd → ModuleEnd → DataEnd → MainObjCreate → MainObjAdd`），无 `undefined symbol`、无跨线程对象警告 |
+| 页面树构建 | `--spec` 加载（`-m/-p` 在 `--spec` 模式下不生效，仅构建页面树） | `DccproxyMain.qml` 与 11 个页面对象全部创建，无 `TypeError`、`ReferenceError`、`Unable to assign` |
+| 图标资源 | 上面两次运行的标准错误 | 无 `Cannot open`；`proxy.svg` 与 `icons/*.svg` 均由插件资源解析（DCI provider 回退到 QIcon 路径），页面与模块图标请求全部命中 |
+| 11 页导航与页面内容 | 通过私有会话总线调用 `ShowPage("dccproxy/<page>")` 逐页打开：11 次导航全部命中，页面内容（编辑器、开关、列表、对话框组件）全部实例化，插件 QML 文件零诊断 | 私有 `dbus-daemon` + `qdbus … ShowPage`，`--spec` 运行（见下方脚本） |
+| 绑定循环修复 | 首次实例化页面内容时发现 6 处 `checked: <属性>` + `onCheckedChanged: <属性> = checked`（以及同类 `text`）双向写回触发绑定循环；改为“值不同才写回”后 11 页零诊断 | 同上运行的警告对比 |
+| dccData 数据通路（全页） | 假控制器记录到 16×`GET /configs`、8×`GET /proxies`、2×`GET /providers/proxies`、1×`GET /rules`、1×`GET /providers/rules`、1×`GET /connections`、1×`GET /logs`，即设置读取、`Api` 配置、3 秒轮询、各页模型与日志流都在主线程正常工作 | 假控制器 + 逐页 `ShowPage` 运行 |
+| systemd 生命周期 | 临时用户单元（`dde-mihomo-daemon.service`，指向构建产物）＋ 直接调用 `Party::Service` 的临时程序 | `unitAvailable` 由 false→true、`setEnabled(true)` 后 `unitEnabled=true`（`systemctl --user enable`）、`start()` 经 systemd 起后台并连上 socket（`daemonReachable=true`，返回后台错误文本并只提示一次）、`stop()` 后 socket 断开、`setEnabled(false)` 复位；`systemctl --user is-active` 为 `inactive`，无残留进程，临时单元已删除 |
+| JS 覆写 | `dde-mihomo-daemon --eval /tmp/override.js 中文订阅` | DNS prepend 保留原顺序且不重复插入、中文订阅名传入第二参数、`includes` 的 NaN/负索引/Infinity/类数组语义为 Qt 6 引擎原生实现；`return null` 与返回 Promise 分别报“必须返回配置对象”与“必须同步返回” |
+| 真实内核集成（随包官方内核） | `python3 tests/smoke_real_core.py --service /usr/lib/dcc-proxy/dde-mihomo-daemon --core /usr/lib/dcc-proxy/mihomo --expect-root`：`PASS official core: v1.19.16`、`desktop user daemon starts a root core with TUN disabled`、DIRECT/REJECT 真实流量、端口/订阅/崩溃恢复、停止释放 | 全部通过（SHA-256 `95a8bd10…a062c`，`root:root 4755`）；同一订阅在 v1.19.16 上启动、控制面连接、混合端口真实转发均通过 |
+| 真实内核集成（历史，v1.19.32） | `python3 tests/smoke_real_core.py --service build/dde-mihomo-daemon --core <本机 Mihomo Meta v1.19.32>` | 全部通过：首个订阅自动启动、DIRECT/REJECT 真实流量与请求头保持、无效配置保留运行内核、端口占用报错、运行时模式切换、端口变更生效、TCP/UDP 与控制器端口冲突处理、离线端口保存、订阅刷新使用 Mihomo 兼容 UA（`mihomo/1.19.16`，403/404 时回退 `Mozilla/5.0` 重试一次）、内核异常退出自动恢复、停止与后台退出释放内核 |
+| 三种模式真实路由 | `python3 tests/smoke_modes.py …` | 通过：规则模式按规则独立选择 proxy/DIRECT/REJECT、全局模式覆盖规则、直连模式绕过 REJECT 与分组选择、切回规则模式恢复 |
+| 私有总线代理联动 | `GSETTINGS_BACKEND=memory python3 tests/smoke_private_proxy.py --private …` | 通过：端口变更同步已启用的手动/PAC 代理、冲突拒绝、启动后自动启用、校验失败保留原代理、重启更新端口、停止恢复、绕过列表编辑与空列表、非法输入 |
+
+补充说明：真实主机桌面代理联动测试（`smoke_system_proxy.py --allow-system-proxy`）
+会临时改写当前会话的桌面代理设置，本轮未执行；只读确认了本机
+`org.deepin.dde.Network1` 与 `com.deepin.daemon.Network` 两套接口与对象路径均存在
+（`GetProxyMethod=auto`），即测试内使用的接口探测逻辑在本机成立。
+
+### 安装包验证（Debian 出包与安装后行为）
+
+本机已安装 `DCC_PROXY_BUNDLE_CORE` / `DCC_PROXY_BUNDLE_GEODATA` 依赖的构建依赖
+（`debhelper`、`dde-control-center-dev`），出包与安装命令：
+
+```sh
+DCC_PROXY_BUNDLE_CORE=0 DCC_PROXY_BUNDLE_GEODATA=0 dpkg-buildpackage -us -uc -b
+sudo dpkg -i ../dcc-proxy_0.2.0_$(dpkg --print-architecture).deb
+```
+
+随包内核与离线数据库需先联网准备缓存；本机下载受阻，因此上述命令显式关闭了两者，
+安装的是使用现有内核的包（可在“设置 → 内核路径”指定内核）。
+
+| 项目 | 结果 |
+| --- | --- |
+| 包内容 | `plugins_v1.1/dccproxy/{dccproxy.so 2.8 MB, libdccproxy_qml.so 472 KB, qmldir}`、`/usr/lib/dcc-proxy/dde-mihomo-daemon`、`/usr/lib/systemd/user/dde-mihomo-daemon.service`、`/usr/share/dde-control-center/translations/v1.1/dccproxy_{zh_CN,en_US}.qm`，全部 `root:root`；包体 1.2 MB |
+| 依赖 | `dh_shlibdeps` 生成 Qt6/glibc/libstdc++ 依赖，另含 `dde-control-center (>= 6.1.104)`、`libdtk6declarative`、`libqt6svg6` 与 4 个 `qml6-module-qtquick*` |
+| 剥离 | 仅排除官方内核（`--exclude=usr/lib/dcc-proxy/mihomo`）；插件与后台正常剥离，调试符号进 `-dbgsym`。此前误把插件也排除，导致 `dccproxy.so` 达 19 MB，已修正 |
+| 安装后加载 | 不加 `--spec` 从正式路径加载：`dccproxy` 走到 `MainObjEnd`/`PluginEnd`，插件 QML 零诊断、无缺失图标，翻译器告警消失（安装的 `.qm` 被找到） |
+| 安装后 systemd | `systemctl --user daemon-reload` 后单元 `Loaded`、`disabled`；`start` → `active (running)` 且有 MainPID，`dde-mihomo-daemon --command status` 返回 JSON；`enable` 在 `~/.config/systemd/user/default.target.wants/` 建链，`disable` 删除；`stop` → `inactive`，无残留进程 |
+| 安装后真实内核 | 以 `/usr/lib/dcc-proxy/dde-mihomo-daemon` 重跑 `smoke_real_core.py`、`smoke_modes.py`、`smoke_private_proxy.py --private` 全部通过 |
+| TUN | `unshare --user --map-root-user --net python3 tests/smoke_tun.py --host-netns "$(readlink /proc/self/ns/net)" --service /usr/lib/dcc-proxy/dde-mihomo-daemon --core <本机内核>` 全部通过（授权后重启获得 CAP_NET_ADMIN、Mixed TUN 自动路由、DNS 劫持与 fake-IP HTTP、MTU 与设备冲突保留内核、唤醒修复、关闭恢复路由、权限失败回滚） |
+| 真实桌面代理 | `python3 tests/smoke_system_proxy.py --service /usr/lib/dcc-proxy/dde-mihomo-daemon --core <本机内核> --allow-system-proxy` 通过；运行前后用 `qdbus … GetProxyMethod/GetProxyIgnoreHosts/GetAutoProxy/GetProxy` 抓取的状态 `diff` 完全一致 |
+
+安装后需要重新打开控制中心，侧栏才会出现“私人代理”（已运行的实例不会热加载新插件）。
+
+### 界面与图标验证
+
+页面样式与图标在无显示环境下通过 Xvfb + 私有会话总线逐页截图复核（不触碰桌面会话）：
+
+```sh
+Xvfb :99 -screen 0 1440x1000x24 -ac -nolisten tcp &
+xvfb=$!
+dbus-run-session -- bash -c '
+  TMPDIR=$(mktemp -d) DISPLAY=:99 QT_QPA_PLATFORM=xcb QT_QUICK_BACKEND=software \
+    /usr/libexec/deepin/dde-control-center --show --spec "$1" &
+  dcc=$!
+  sleep 8
+  # 逐页导航并截取窗口
+  /usr/lib/qt6/bin/qdbus org.deepin.dde.ControlCenter1 /org/deepin/dde/ControlCenter1 \
+    org.deepin.dde.ControlCenter1.ShowPage dccproxy/settings
+  sleep 1.2
+  xwd -silent -id $(xdotool search --class dde-control-center | head -1) | xwdtopnm | pnmtopng > shot.png
+  kill $dcc
+' -- <插件目录>
+kill $xvfb
+```
+
+私有总线是必需的：`TMPDIR` 隔离了 DTK 的单实例锁，但控制中心仍会在会话总线上注册
+`org.deepin.dde.ControlCenter1`，与会话中已运行的控制中心冲突。
+
+用 `dbus-run-session` 而不是 `dbus-daemon --session --fork`：后者 `--fork` 后不会随命令退出，
+每次验证都会留下一套总线及其激活的 `xdg-desktop-portal`/`xdg-permission-store`/`gvfsd`；
+累积约 250 个 X 客户端后 Xorg 报 `Maximum number of clients reached`，控制中心将无法建连。
+
+图标：`qml/*.dci` 由 `dci-icon-theme` 从 24×24 网格的符号图形生成（light/dark 两套调色板），
+打包进 QML 模块资源；页面以图标名（`overview`、`proxies` … `proxy`）引用，
+加载日志中既无 `Failed to get image from provider` 也无 `Cannot open`。
+
+本轮结果：11 个页面逐页截图复核，加载日志零 QML 诊断；`DccTitleObject` 分节、
+分组卡片、控件对齐、右对齐操作行、表格分隔线与空状态均符合控制中心版式。
+深色主题未在会话中切换验证，但 QML 不含硬编码颜色，全部取自 `palette.*`。
+
+### 空闲占用回归（控制中心 CPU）
+
+用户反馈控制中心占用高。复现与定位：用**真实用户数据目录**（62 节点 / 22 策略组 / 内核运行中）
+在 Xvfb 中启动控制中心，逐项测量主进程 CPU（`/proc/<pid>/stat` 增量）：
+
+| 配置 | 修复前 | 修复后 |
+| --- | --- | --- |
+| 空数据目录（基线） | 0.2% | 0.2% |
+| 用户数据目录 + 模块页（控制器可达） | 70–85% | 0.4% |
+| 用户数据目录 + 概览页 | 74% | 0.0% |
+| 用户数据目录 + 代理组页（稳定后） | 102% | 0.2%（首次渲染一次性约 33%） |
+| 用户数据目录 + 日志页 | — | 0.1% |
+| 订阅预览模式（控制器不可达/密钥不符） | 48% | 0.2% |
+| 仅订阅、无 settings | 47.9% | 0.2% |
+
+逐键二分定位到触发组合：`active` + `endpoint` + `secret` 同时存在时必现（单独任意键均 <1%）——
+即"已配置订阅 + 控制器可连"。此时每 3 秒把所有策略组/节点模型整体重建一次：
+运行时 `/proxies` 的健康检查历史令数据指纹每轮都变化；预览模式（控制器不可达或密钥不符）
+则在"指纹未变"分支里仍调用 `rebuild()`。两种路径都会重置 22 个分组模型与 62 个节点模型，
+使屏幕上 22 张分组卡片、62 张节点卡片（含国旗 SVG 解码）被反复重建。
+
+修复：
+
+1. 模块把控制中心当前页（`DccApp.activeObject`）上报给 `dccData`；离开本插件页面时
+   停止 systemd 查询、控制器轮询与日志流，回到页面立即刷新一次；
+2. 运行时数据按"界面真正显示的字段"计算指纹（名称/类型/当前节点/可用性/延迟/成员列表），
+   指纹不变就不重建模型；
+3. 连接列表的 3 秒轮询只在连接页显示时运行；日志流只在日志页打开；
+4. `NodeModel::reset` / `GroupModel::updateRow` 在行内容一致时不发信号，`rebuild()` 先比较
+   "数据 + 视图状态（搜索/排序/隐藏/展开/测速结果/当前组）"签名，一致则整轮跳过；
+5. 日志行改用 `D.Label`（超长行仍截断显示，但悬停可看完整内容）。
+
+### 逐页打开页面内容（无显示环境）
+
+`--spec` 模式下 `-m/-p` 不会触发子页面导航，页面内容也不会实例化。要在无显示环境
+实际打开每个页面，用私有会话总线调用控制中心的 `ShowPage`：
+
+```sh
+unshare --user --map-root-user --fork --pid dbus-run-session -- bash -c '
+  export XDG_RUNTIME_DIR=$(mktemp -d)
+  QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software \
+    /usr/libexec/deepin/dde-control-center --spec "$PWD/build/lib/plugins_v1.1/" &
+  dcc=$!
+  sleep 8
+  for p in overview proxies profiles connections rules providers logs override tools settings tun; do
+    /usr/lib/qt6/bin/qdbus org.deepin.dde.ControlCenter1 /org/deepin/dde/ControlCenter1 \
+      org.deepin.dde.ControlCenter1.ShowPage "dccproxy/$p"
+    sleep 1.2
+  done
+  kill $dcc'
+```
+
+私有总线必须在同一个用户命名空间内启动：`unshare --map-root-user` 的进程在总线
+认证中声明 uid 0，宿主会话总线会接受（因此 `--spec` 单独运行照常工作），但手动启动的
+`dbus-daemon` 会拒绝，表现为日志中的 `dbus service already registered!`。
+这里用 `dbus-run-session` 托管总线，命令结束即回收；不要改回
+`dbus-daemon --session --fork`，否则总线和它激活的 portal 进程都会残留。
+
+页面内容实例化会暴露仅靠页面树加载看不到的问题：本轮由此发现并修复了 6 处
+`checked`/`text` 双向写回导致的绑定循环（`onCheckedChanged: <属性> = checked`
+改为 `if (<属性> !== checked) <属性> = checked`）。修复后 11 页零诊断。
+把实测的假控制器（记录请求的本地 HTTP 服务）设为 `endpoint` 并逐页打开，可以同时
+验证各页数据通路：实测收到 `/configs`、`/proxies`、`/providers/proxies`、`/rules`、
+`/providers/rules`、`/connections` 与 `/logs` 流请求。
 
 ## 0.1.9 AnyTLS 订阅导入
 
@@ -31,7 +237,10 @@ python3 tests/smoke_real_core.py \
 端口变更与崩溃恢复后仍为 root。普通用户可停止内核，重启和后台正常退出均不遗留旧进程。
 本地 HTTP/SOCKS 实际流量、无效配置和占用端口保留现有内核的检查同时通过。
 
-## 自动测试
+## 自动测试（0.1.x 控件版记录）
+
+以下结果属于移植前的 Qt 5 控件版；0.2.0 的测试二进制为 `party-tests`（`tests/test_plugindata.cpp`），
+运行方式见 0.2.0 一节，本轮未运行。
 
 `dpkg-buildpackage -us -uc -b` 和 `tools/build-deb.sh` 支持标准 Debian 与 CPack 两种打包方式。
 标准打包已在两个架构上完整编译、执行测试并生成对应 deb；内置 QtTest 的 18 项结果全部通过。
@@ -80,10 +289,12 @@ Provider 健康检查请求，以及统一延迟默认开启、用户明确关�
 `src/main/core/mihomoApi.ts` 和 `src/renderer/src/pages/proxies.tsx`：
 默认统一延迟、5000 ms 超时、50 并发、测速 URL 优先级、逐节点回收及 Provider 健康检查。
 
-## 远端实际环境
+## 远端实际环境（0.1.x 控件版记录）
 
-ARM64 deb 已安装到 `/usr/lib/dde-control-center/modules/libdcc-proxy.so`。
-控制中心可加载 `dcc-proxy`，名称为“私人代理”，节点页使用多列国旗卡片。
+ARM64 deb（Qt 5 控件版）已安装到 `/usr/lib/dde-control-center/modules/libdcc-proxy.so`；
+0.2.0 改为 V25 的 `plugins_v1.1` 布局，安装到 `…/dde-control-center/plugins_v1.1/dccproxy/`，
+插件名改为 `dccproxy`。以下远端结论仍然成立，因为它们取自后台与内核行为，与插件 ABI 无关。
+控制中心可加载“私人代理”，节点页使用多列国旗卡片。
 真实 URL 订阅读取到 10 个 Hysteria2 节点。针对“全部测速失败”，同一 ARM64 内核和同一组节点进行隔离对比：
 完整订阅配置下测试失败；仅移除订阅 DNS，或仅增加 `proxy-server-nameserver: [system]` 后测试成功。
 最终修复使用后一种方式，保留订阅原有 DNS 规则，只解决节点服务器域名的启动解析问题。
@@ -99,7 +310,7 @@ ARM64 deb 已安装到 `/usr/lib/dde-control-center/modules/libdcc-proxy.so`。
 真实订阅、节点密钥、测试机登录凭据和实际屏幕截图均未加入仓库。
 `docs/screenshots/node-grid.png` 使用虚拟节点生成，仅作布局示例。
 
-## 重现
+## 重现（0.2.0）
 
 标准 Debian 打包，产物在项目目录上一级：
 
@@ -111,23 +322,29 @@ dpkg-buildpackage -us -uc -b
 不存在时从官方地址下载。可使用 `DCC_PROXY_BUNDLE_CORE=0` 打包不含内核的版本。
 安装不会自动启用登录自启，继续由插件设置控制。
 
-CPack 和内核集成测试：
+CPack 和内核集成测试（`--preview` 已随控件版预览程序一起删除）：
 
 ```sh
 ./tools/build-deb.sh
 python3 tests/smoke_real_core.py \
   --service build-$(dpkg --print-architecture)/dde-mihomo-daemon \
-  --core cores/$(dpkg --print-architecture)/mihomo \
-  --preview build-$(dpkg --print-architecture)/dcc-proxy-preview
+  --core cores/$(dpkg --print-architecture)/mihomo
 ```
 
-系统代理集成测试会短暂修改当前桌面代理，并在结束时恢复，须明确传入测试开关：
+系统代理集成测试会短暂修改当前桌面代理，并在结束时恢复，须明确传入测试开关。
+测试使用 Qt 6 的 `qdbus`（脚本优先使用 `/usr/lib/qt6/bin/qdbus`，`/usr/bin/qdbus`
+只是无法解析 qt6 profile 的 qtchooser 包装）：
 
 ```sh
+python3 tests/smoke_private_proxy.py \
+  --service build-$(dpkg --print-architecture)/dde-mihomo-daemon \
+  --core cores/$(dpkg --print-architecture)/mihomo
 python3 tests/smoke_system_proxy.py \
   --service build-$(dpkg --print-architecture)/dde-mihomo-daemon \
   --allow-system-proxy
 ```
+
+插件本体的验证使用 0.2.0 一节的独立加载命令；本轮未运行上述任何命令。
 
 
 ## 0.1.2 概览与 TUN 回归
@@ -195,22 +412,30 @@ Qt 回归增加缺失 mixed-port 时的默认监听及显式覆写优先级检�
 active、不发切换/测速请求，不将未启动状态标为节点失败。inline provider、include-all、
 正则分组与私密节点字段不进入预览模型也有覆盖。
 
-## JavaScript 覆写兼容回归（0.1.5）
+## JavaScript 覆写回归（0.2.0，Qt 6 引擎）
 
-`javascriptOverrideDnsAndProfileName` 通过实际后台 `--eval` 子进程执行用户的 DNS
-prepend 脚本：保留原 DNS 顺序、插入 `10.20.0.10`、重复执行不重复插入，覆盖缺失
-DNS 和非数组 nameserver，并验证中文订阅名传入第二参数以及 includes 的 NaN、负索引、
-Infinity 和类数组行为。`javascriptOverrideErrors` 覆盖运行时异常、字符串异常、语法错误、
-无返回值、null、数组、循环引用、异步结果及非法 JSON 输入，验证错误不再被返回值校验掩盖。
+覆写通过后台真实的 `--eval` 子进程执行（`dde-mihomo-daemon --eval <override.js> <订阅名>`，
+输入为运行配置 JSON，输出为覆写后的配置）。0.2.0 起使用 Qt 6 的 V4 引擎，
+`Array.prototype.includes()` 由引擎原生提供，兼容补丁已移除；本轮以真实子进程验证：
 
-## 0.1.5 全功能回归清单
+- DNS prepend 脚本保留原顺序、插入 `10.20.0.10`，重复执行不重复插入，缺失 DNS 或
+  nameserver 非数组时按原逻辑处理，中文订阅名正确传入第二个参数。
+- 引擎语义：`[NaN].includes(NaN)`、负索引、`Infinity`、`Array.prototype.includes.call`
+  的类数组行为均与规范一致。
+- 错误路径：`return null`、返回数组、返回 Promise（异步）以及非法 JSON 输入分别报
+  `Override must return a configuration object`、
+  `Override main must return a configuration object synchronously` 等原有错误文本。
+  脚本运行时异常、语法错误仍会带文件名与行号。
 
-`QA-0.1.5.md` 逐项列出本轮验证与实际覆盖边界。完整 Qt 回归包含真实内核日志、HTTPS
+## 0.1.5 全功能回归清单（0.1.x 控件版记录）
+
+该轮的逐项自测清单已由 `QA-V25.md` 取代：`QA-V25.md` 记录 0.2.0 的环境事实、
+已验证项与未运行项，本节保留仍然有效的验证点。完整 Qt 回归包含真实内核日志、HTTPS
 WebDAV、原生密码小眼睛、概览五种有效示例、YAML 覆写说明和 460px 长提示布局检查。
 
 `smoke_real_core.py` 增加混合/HTTP/SOCKS 真实流量、TCP/UDP 冲突、控制器冲突/重复/范围
 校验、保存失败原配置保留、离线保存与端口持久化、订阅强制更新及异常退出自动恢复。
-应用 HTTP 头保持原样，订阅下载使用中性 UA。
+应用 HTTP 头保持原样；订阅下载使用 Mihomo 兼容 UA（多数订阅面板按 UA 决定导出格式，浏览器 UA 会被拒绝），核心资源下载仍使用 `Mozilla/5.0`。
 
 系统代理测试可以使用环境已有 DBus/GLib，在独立会话总线上验证，避免修改宿主设置：
 

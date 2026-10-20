@@ -1,3 +1,34 @@
+dcc-proxy (0.2.0) unstable; urgency=medium
+
+  * Port the control center plugin to the V25 QML plugin ABI (Qt 6.8, DTK 6):
+    install as plugins_v1.1/dccproxy with the qml/Dccproxy.qml metadata object
+    and the eleven-page QML page tree (overview, proxies, profiles,
+    connections, rules, providers, logs, override, tools, settings, tun).
+  * Expose the whole plugin as a QML data object (dccData) from C++; the plugin
+    no longer links QtWidgets and the widget page and preview binary are gone.
+  * Manage the bundled core through the systemd user unit
+    dde-mihomo-daemon.service (status/start/stop/enable from the plugin), while
+    the daemon keeps running after the control center closes.
+  * Build with Qt 6 / DTK 6 and dde-control-center 6.1 development files; drop
+    every Qt 5 and DTK 5 build and runtime dependency.
+  * Keep the bundled official Mihomo core, its root:root 4755 authorization and
+    the offline geodata set; keep the login-autostart switch user controlled.
+  * Draw the module and page icons as theme-aware DCI files (light and dark
+    palettes) and restyle every page with the control center's own building
+    blocks (section titles, group cards, aligned editor rows, table headers,
+    empty states, palette-only colors).
+  * Download subscriptions with a Mihomo-compatible User-Agent
+    (mihomo/1.19.16, falling back to Mozilla/5.0 once on 403/404): many
+    subscription panels answer browser user agents with 404 or HTML.
+  * Poll only the data the visible page needs: the module reports the control
+    center's active page, runtime models are rebuilt only when the displayed
+    values change, and the log stream and connection list run only while their
+    page is on screen (an idle control center used to burn a full core).
+  * Update the smoke tests, Debian packaging and documentation for the V25
+    layout (build/lib/plugins_v1.1/dccproxy).
+
+ -- DCC Proxy maintainers <Mars-cb@users.noreply.github.com>  Mon, 19 Oct 2026 12:30:00 +0800
+
 dcc-proxy (0.1.9) unstable; urgency=medium
 
   * Import AnyTLS share links from plain and Base64 URI subscriptions.

@@ -6,6 +6,7 @@
 /debian/.debhelper/
 /debian/debhelper-build-stamp
 /debian/files
+/debian/tmp/
 /debian/*.substvars
 /debian/*.debhelper
 /debian/*.debhelper.log

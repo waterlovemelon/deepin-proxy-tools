@@ -2,7 +2,7 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QStringList>
-#include <QVector>
+#include <QList>
 
 namespace Party {
 namespace {
@@ -87,7 +87,9 @@ QString nodeDisplayName(const QString &name)
         if (regional(chars[i]) && regional(chars[i + 1])) { chars.remove(i, 2); }
         else ++i;
     }
-    const auto result = QString::fromUcs4(chars.constData(), chars.size()).trimmed();
+    // Qt 6 keeps QList<uint> for toUcs4(); fromUcs4() now takes char32_t,
+    // which is the same 32-bit code unit (matches Qt's own deprecated shim).
+    const auto result = QString::fromUcs4(reinterpret_cast<const char32_t *>(chars.constData()), chars.size()).trimmed();
     return result.isEmpty() ? name : result;
 }
 }

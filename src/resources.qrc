@@ -1,6 +1,4 @@
 <RCC><qresource prefix="/dcc-proxy">
-<file>proxy.svg</file><file>proxy-dark.svg</file>
-<file>translations/dcc-proxy_zh_CN.ts</file><file>translations/dcc-proxy_en_US.ts</file>
 <file>unknown-location.svg</file>
 <file alias="flags/ad.svg">../third_party/flag-icons/4x3/ad.svg</file>
 <file alias="flags/ae.svg">../third_party/flag-icons/4x3/ae.svg</file>

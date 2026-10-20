@@ -48,7 +48,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--service", default="/usr/lib/dcc-proxy/dde-mihomo-daemon")
     parser.add_argument("--core", default="/usr/lib/dcc-proxy/mihomo")
-    parser.add_argument("--preview")
     parser.add_argument("--expect-root", action="store_true", help="Verify a user daemon manages the installed root core")
     args = parser.parse_args()
     if args.expect_root:
@@ -76,7 +75,6 @@ def main():
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         target = http.server.HTTPServer(("127.0.0.1", 0), Target)
         threading.Thread(target=target.serve_forever, daemon=True).start()
-        preview = None
 
         def command(action):
             with socket.socket(socket.AF_UNIX) as s:
@@ -159,17 +157,11 @@ def main():
             assert rejected
             print("PASS REJECT selection blocks actual HTTP traffic")
             api(path, "PUT", {"name": "DIRECT"})
+            # The core must survive the UI going away. The V25 plugin runs inside
+            # dde-control-center, so this is verified with the standalone load
+            # harness documented in docs/TESTING.md; here the daemon keeps the
+            # core alive while no UI process is attached.
             original_pid = command({"action": "status"})["pid"]
-            if args.preview:
-                preview = subprocess.Popen([args.preview, "Proxies"], env=env,
-                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                time.sleep(2)
-                assert preview.poll() is None, "Preview failed to open"
-                preview.terminate()
-                preview.wait(timeout=5)
-                assert command({"action": "status"})["pid"] == original_pid
-                assert through_proxy() == b"dcc-proxy-real-core-ok"
-                print("PASS closing plugin window leaves the same core running")
             profile.write_text("mixed-port: invalid-port\n")
             invalid = command({"action": "restart", "profile": profile_id})
             assert invalid.get("error"), invalid
@@ -260,9 +252,9 @@ def main():
                     break
                 time.sleep(.1)
             else: raise AssertionError("Active subscription update did not finish")
-            assert Target.subscription_user_agent == "Mozilla/5.0", Target.subscription_user_agent
+            assert Target.subscription_user_agent == "mihomo/1.19.16", Target.subscription_user_agent
             assert through_proxy() == b"dcc-proxy-real-core-ok"
-            print("PASS subscription refresh uses a neutral User-Agent, preserves controlled ports and applies the active configuration")
+            print("PASS subscription refresh uses the Mihomo-compatible User-Agent, preserves controlled ports and applies the active configuration")
             crashed_pid = command({"action": "status"})["pid"]
             os.kill(crashed_pid, signal.SIGKILL)
             deadline = time.monotonic() + 15
@@ -284,9 +276,6 @@ def main():
             assert not Path('/proc/%d' % exit_pid).exists(), "Daemon exit left an orphan core"
             print("PASS daemon termination releases the managed core")
         finally:
-            if preview is not None and preview.poll() is None:
-                preview.terminate()
-                preview.wait(timeout=5)
             with contextlib.suppress(Exception):
                 command({"action": "quit"})
             try:

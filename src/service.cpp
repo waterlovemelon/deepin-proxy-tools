@@ -36,6 +36,7 @@
 #include <sys/socket.h>
 #include <signal.h>
 #include <unistd.h>
+#include <cstdio>
 #include <functional>
 
 using namespace Party;
@@ -261,7 +262,7 @@ private:
         if (m_busy) { answer({{"error", "A core operation is in progress"}}); return; }
         const auto settings = m_store.settings();
         QString core = settings["core"].toString();
-        if (!QFileInfo(core).isExecutable() || !QFileInfo(core).isFile()) throw std::runtime_error("Select an executable Mihomo core in Settings");
+        if (!QFileInfo(core).isExecutable() || !QFileInfo(core).isFile()) throw std::runtime_error("请在“设置 → 内核路径”选择一个可执行的 Mihomo 内核");
         if (QFileInfo(core).canonicalFilePath() == "/usr/lib/dcc-proxy/mihomo" && !hasTunPermission(core))
             throw std::runtime_error("随包内核缺少 root 启动授权，请重新安装 dcc-proxy 或在虚拟网卡页面授权内核");
         const QString work = dataDir() + "/work";
@@ -667,27 +668,9 @@ int main(int argc, char **argv)
             if (parseError.error != QJsonParseError::NoError || !doc.isObject())
                 throw std::runtime_error("Override input must be a JSON configuration object");
             QJSEngine js;
-            // Qt 5.11 lacks Array.prototype.includes. Keep Clash scripts working
-            // without replacing the system engine or adding runtime dependencies.
-            js.evaluate(QStringLiteral(R"JS(
-                if (!Array.prototype.includes) Object.defineProperty(Array.prototype, 'includes', {
-                    configurable: true, writable: true,
-                    value: function(value, fromIndex) {
-                        'use strict';
-                        if (this == null) throw new TypeError('includes called on null or undefined');
-                        var array = Object(this);
-                        var length = Math.min(Math.max(Math.floor(Number(array.length) || 0), 0), 9007199254740991);
-                        var index = Number(fromIndex) || 0;
-                        index = index < 0 ? Math.ceil(index) : Math.floor(index);
-                        if (index < 0) index = Math.max(length + index, 0);
-                        for (; index < length; ++index) {
-                            var item = array[index];
-                            if (item === value || (item !== item && value !== value)) return true;
-                        }
-                        return false;
-                    }
-                });
-            )JS"));
+            // Qt 6's V4 engine already implements the ES2016 array helpers the
+            // override contract relies on (Array.prototype.includes), so no
+            // compatibility shim is installed here.
             const auto json = js.globalObject().property("JSON");
             auto parse = json.property("parse");
             auto stringify = json.property("stringify");

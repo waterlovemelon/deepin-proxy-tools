@@ -8,6 +8,7 @@
 #include <QSharedPointer>
 #include <memory>
 #include <QUrlQuery>
+#include <QStringList>
 #include <QRegularExpression>
 
 namespace Party {
@@ -139,7 +140,7 @@ void serviceRequest(const QJsonObject &command, QObject *context, Api::Done done
         done(result, error);
     };
     QObject::connect(timer, &QTimer::timeout, context, [finish] { finish({}, QObject::tr("Background service timed out")); });
-    QObject::connect(socket, QOverload<QLocalSocket::LocalSocketError>::of(&QLocalSocket::error), context,
+    QObject::connect(socket, &QLocalSocket::errorOccurred, context,
         [socket, finish](QLocalSocket::LocalSocketError) { finish({}, socket->errorString()); });
     QObject::connect(socket, &QLocalSocket::connected, context, [socket, command] {
         socket->write(QJsonDocument(command).toJson(QJsonDocument::Compact) + '\n');
@@ -160,43 +161,51 @@ void serviceRequest(const QJsonObject &command, QObject *context, Api::Done done
 void fetchSubscription(const QUrl &url, const QJsonObject &options, int proxyPort, QObject *context, SubscriptionDone done)
 {
     if (!url.isValid() || !url.userInfo().isEmpty() || (url.scheme() != "http" && url.scheme() != "https")) { done({}, {}, QObject::tr("订阅 URL 无效")); return; }
+    // Subscription panels usually decide the export format (and whether to
+    // answer at all) from the User-Agent: a plain browser UA gets an HTML page
+    // or HTTP 404 on many providers, while the Mihomo family receives the full
+    // Clash/Mihomo YAML. Keep a per-profile override as the highest priority.
     QString userAgent = options["userAgent"].toString();
-    if (userAgent.isEmpty()) userAgent = "Mozilla/5.0";
+    const bool customUserAgent = !userAgent.isEmpty();
+    if (userAgent.isEmpty()) userAgent = QStringLiteral("mihomo/1.19.16");
     const QString authorization = options["authToken"].toString();
     if (userAgent.contains('\n') || userAgent.contains('\r') || authorization.contains('\n') || authorization.contains('\r')) { done({}, {}, QObject::tr("订阅请求头无效")); return; }
-    using Attempt = std::function<void(QUrl, bool, int)>;
+    using Attempt = std::function<void(QUrl, bool, int, bool)>;
     const auto attempt = std::make_shared<Attempt>();
     const std::weak_ptr<Attempt> weak(attempt);
-    *attempt = [weak, context, done, options, url, userAgent, authorization, proxyPort](QUrl current, bool proxy, int redirects) {
+    *attempt = [weak, context, done, options, url, userAgent, customUserAgent, authorization, proxyPort](QUrl current, bool proxy, int redirects, bool browserFallback) {
         auto retained = weak.lock();
         if (!retained) return;
         auto *manager = new QNetworkAccessManager(context);
         manager->setProxy(proxy ? QNetworkProxy(QNetworkProxy::HttpProxy, "127.0.0.1", quint16(proxyPort)) : QNetworkProxy(QNetworkProxy::NoProxy));
         QNetworkRequest request(current);
-        request.setRawHeader("User-Agent", userAgent.toUtf8());
+        request.setRawHeader("User-Agent", (browserFallback ? QStringLiteral("Mozilla/5.0") : userAgent).toUtf8());
         request.setRawHeader("Accept-Encoding", "identity");
         if (!authorization.isEmpty() && current.host() == url.host()) request.setRawHeader("Authorization", authorization.toUtf8());
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
         auto *reply = manager->get(request);
         QTimer::singleShot(qBound(5, options["timeoutSeconds"].toInt(30), 180) * 1000, reply, &QNetworkReply::abort);
         QObject::connect(reply, &QNetworkReply::readyRead, context, [reply] { if (reply->bytesAvailable() > 8 * 1024 * 1024) reply->abort(); });
-        QObject::connect(reply, &QNetworkReply::finished, context, [manager, reply, retained, done, options, url, current, proxy, redirects, proxyPort] {
+        QObject::connect(reply, &QNetworkReply::finished, context, [manager, reply, retained, done, options, url, current, proxy, redirects, proxyPort, browserFallback, customUserAgent, userAgent] {
             manager->deleteLater();
             const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             const auto redirected = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
             if (status >= 300 && status < 400 && !redirected.isEmpty()) {
                 const auto next = current.resolved(redirected);
                 if (redirects >= 5 || (next.scheme() != "http" && next.scheme() != "https") || (current.scheme() == "https" && next.scheme() != "https") || !next.userInfo().isEmpty()) { done({}, {}, QObject::tr("订阅重定向无效或次数过多")); return; }
-                (*retained)(next, proxy, redirects + 1); return;
+                (*retained)(next, proxy, redirects + 1, browserFallback); return;
             }
             if (reply->error() != QNetworkReply::NoError || status < 200 || status >= 300) {
-                if (!proxy && proxyPort > 0 && options["proxyFallback"].toBool(true)) { (*retained)(url, true, 0); return; }
+                // A provider may reject the client UA in favour of a browser;
+                // retry once with the previous neutral UA before giving up.
+                if (!customUserAgent && !browserFallback && (status == 403 || status == 404)) { (*retained)(url, proxy, 0, true); return; }
+                if (!proxy && proxyPort > 0 && options["proxyFallback"].toBool(true)) { (*retained)(url, true, 0, browserFallback); return; }
                 done({}, {}, QObject::tr("订阅下载失败（HTTP %1）：%2").arg(status).arg(reply->errorString())); return;
             }
             QJsonObject metadata;
             const auto info = QString::fromLatin1(reply->rawHeader("subscription-userinfo"));
             QJsonObject usage;
-            for (const auto &field : info.split(';', QString::SkipEmptyParts)) {
+            for (const auto &field : info.split(';', Qt::SkipEmptyParts)) {
                 const auto pair = field.trimmed().split('=');
                 if (pair.size() == 2 && QStringList{"upload", "download", "total", "expire"}.contains(pair[0])) usage[pair[0]] = pair[1];
             }
@@ -214,6 +223,6 @@ void fetchSubscription(const QUrl &url, const QJsonObject &options, int proxyPor
             done(reply->readAll(), metadata, {});
         });
     };
-    (*attempt)(url, options["useProxy"].toBool(false) && proxyPort > 0, 0);
+    (*attempt)(url, options["useProxy"].toBool(false) && proxyPort > 0, 0, false);
 }
 }
